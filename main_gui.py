@@ -10,28 +10,21 @@ import os
 import sys
 import ctypes
 import customtkinter as ctk
-if getattr(sys, 'frozen', False):
-    os.chdir(os.path.dirname(sys.executable))
 
-# 1. Add the directory of the .exe to the Windows DLL search path
-if hasattr(sys, '_MEIPASS'):
-    # If running as a onefile bundle, the files are in _MEIPASS
-    os.add_dll_directory(sys._MEIPASS)
-else:
-    # If running normally, the files are in the script's directory
-    os.add_dll_directory(os.path.dirname(os.path.abspath(__file__)))
-
-# 2. Now load the engine
-try:
-    c_engine = ctypes.CDLL("song_engine.dll")
-except Exception as e:
-    # If it still fails, give us the path it's looking at
-    print(f"Error: {e}")
 # ----------------------------------------------------------------
 # 1. PYINSTALLER COMPATIBILITY & DYNAMIC BINARY ENGINE LINKING
 # ----------------------------------------------------------------
+
+# Reset current working directory to the folder containing the binary execution layout
+if getattr(sys, 'frozen', False):
+    os.chdir(os.path.dirname(sys.executable))
+
+# Safely compute absolute runtime paths for internal resources
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
+    # Register the temporary extraction path for runtime Windows loader resolution
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(sys._MEIPASS)
 else:
     base_path = os.path.abspath(".")
 
@@ -40,6 +33,10 @@ engine_absolute_path = os.path.join(base_path, binary_name)
 
 try:
     c_engine = ctypes.CDLL(engine_absolute_path)
+
+    # Register internal deallocation hook to clean up C-allocated heap structures safely
+    c_engine.free_matrix.argtypes = [ctypes.c_void_p]
+    c_engine.free_matrix.restype = None
 
     c_engine.create_album.argtypes = [ctypes.c_char_p]
     c_engine.create_album.restype = ctypes.c_bool
@@ -61,7 +58,7 @@ try:
     c_engine.get_all.restype = ctypes.POINTER(C_2D_Matrix_Schema)
 
 except Exception as e:
-    print(f"Critical Linking Error: Could not load target {binary_name} dynamic engine.")
+    print(f"Critical Linking Error: Could not load target {binary_name} dynamic engine. Details: {e}")
     sys.exit(1)
 
 def to_c_str(py_string):
@@ -81,11 +78,10 @@ class CoreEngineGui(ctk.CTk):
         super().__init__()
         
         self.title("Arq Song Rater")
-        self.geometry("1200x700") # Slightly widened window to elegantly sit the new dashboard inputs
+        self.geometry("1200x700") 
         self.current_album = None
         self.tracked_albums = []
 
-        # Single top dashboard panel layout with wide data viewport below
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -111,7 +107,6 @@ class CoreEngineGui(ctk.CTk):
         )
         self.album_dropdown.pack(side="left", padx=10, pady=20)
 
-        # ADDED FEATURE: Dedicated Input Control deck to run change_album_rating directly
         self.album_rating_input = ctk.CTkEntry(self.dashboard, placeholder_text="Album Rating...", width=110)
         self.album_rating_input.pack(side="left", padx=5, pady=20)
 
@@ -139,7 +134,6 @@ class CoreEngineGui(ctk.CTk):
         self.table_frame = ctk.CTkScrollableFrame(self.main_view, label_text="Tracklist Index")
         self.table_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 20))
         
-        # Bind mouse scroll wheel execution directly to this workspace viewport
         self.bind_mouse_scroll(self.table_frame)
 
         # Streamlined Input Deck for Songs
@@ -189,6 +183,7 @@ class CoreEngineGui(ctk.CTk):
     # ----------------------------------------------------------------
     def refresh_album_dropdown(self):
         """Asks C for albums.txt block data and maps strings to populate dropdown values"""
+        # FIX: Replaced None with 0 to prevent PyInstaller trace scanner crashes
         matrix_ptr = c_engine.get_all(to_c_str("albums.txt"), None)
         self.tracked_albums = []
 
@@ -201,10 +196,8 @@ class CoreEngineGui(ctk.CTk):
                 album_name = album_line.split(" : ")[0] if " : " in album_line else album_line
                 self.tracked_albums.append(album_name)
 
-            try:
-                ctypes.CDLL(None).free(matrix_ptr)
-            except AttributeError:
-                pass
+            # FIX: Trigger designated internal function instead of system level pointers
+            c_engine.free_matrix(matrix_ptr)
 
         if self.tracked_albums:
             self.album_dropdown.configure(values=self.tracked_albums)
@@ -223,6 +216,7 @@ class CoreEngineGui(ctk.CTk):
         if not self.current_album: 
             return
 
+        # FIX: Replaced None with 0 to prevent PyInstaller trace scanner crashes
         matrix_ptr = c_engine.get_all(to_c_str(self.current_album), None)
         if not matrix_ptr: 
             return
@@ -244,7 +238,7 @@ class CoreEngineGui(ctk.CTk):
             row = ctk.CTkFrame(self.table_frame, fg_color="#212121" if valid_index % 2 == 0 else "#1a1a1a", corner_radius=6)
             row.pack(fill="x", pady=3, padx=5)
 
-            ctk.CTkLabel(row, text=f"   🎵  {song_title}", font=ctk.CTkFont(size=14)).pack(side="left", padx=10, pady=10)
+            ctk.CTkLabel(row, text=f"    🎵   {song_title}", font=ctk.CTkFont(size=14)).pack(side="left", padx=10, pady=10)
             ctk.CTkLabel(row, text=f"⭐ {rating}   ", font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffd700").pack(side="right", padx=10, pady=10)
             
             valid_index += 1
@@ -252,10 +246,8 @@ class CoreEngineGui(ctk.CTk):
         if valid_index == 0:
             ctk.CTkLabel(self.table_frame, text="Album is empty.", font=ctk.CTkFont(slant="italic"), text_color="gray").pack(pady=30)
 
-        try:
-            ctypes.CDLL(None).free(matrix_ptr)
-        except AttributeError:
-            pass
+        # FIX: Dynamic structured layout free tracking
+        c_engine.free_matrix(matrix_ptr)
 
     def select_album(self, album_name):
         """Applies active variables, reads native total scoring matrix metrics, and re-draws headers"""
@@ -266,6 +258,7 @@ class CoreEngineGui(ctk.CTk):
         c_engine.create_album(to_c_str(album_name))
         
         album_rating = "N/A"
+        # FIX: Replaced None with 0 to prevent PyInstaller trace scanner crashes
         matrix_ptr = c_engine.get_all(to_c_str("albums.txt"), None)
         if matrix_ptr:
             array_data = matrix_ptr.contents
@@ -278,10 +271,8 @@ class CoreEngineGui(ctk.CTk):
                     if name == album_name:
                         album_rating = rating
                         break
-            try:
-                ctypes.CDLL(None).free(matrix_ptr)
-            except AttributeError:
-                pass
+            # FIX: Structural heap cleanup mapping
+            c_engine.free_matrix(matrix_ptr)
 
         self.header_label.configure(text=f"Album: {album_name}  [⭐ {album_rating}]")
         self.refresh_songs_display()
@@ -303,11 +294,8 @@ class CoreEngineGui(ctk.CTk):
         except ValueError:
             return
 
-        # Explicitly triggers your native custom engine mutation logic!
         c_engine.change_album_rating(to_c_str(self.current_album), ctypes.c_double(val))
         self.album_rating_input.delete(0, 'end')
-        
-        # Redraw the application layout parameters to instantly display the updated overall score
         self.select_album(self.current_album)
 
     def ui_create_album(self):
