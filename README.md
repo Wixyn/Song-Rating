@@ -10,6 +10,4 @@
 
 3.Run "main_gui.exe" if on windows.
 
-4.On Linux variants such as Ubuntu, run "chmod +x main_gui" and then "./main_gui" on the terminal to run the program.
-
-5.Enjoy!
+4.Enjoy!
